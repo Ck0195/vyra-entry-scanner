@@ -8,276 +8,143 @@ type Result = {
   id?: string;
   name?: string;
   passType?: string;
+  scannedAt?: string;
   message?: string;
 };
 
+/* Same Apps Script deployment that generates the passes (index.html) */
 const APPS_SCRIPT_URL =
-  "https://script.google.com/macros/s/AKfycbxlk_WisRENOqbdwxabb--s0T0C7iuQkd2Wi341KaGKy3pkhx0EoXi25gApAhsM3VvE/exec";
+  "https://script.google.com/macros/s/AKfycby4H4DKhAQ5wtGGGxidRmhz4Obr9W0-s9rGy7KFjIO5LE3Rv6vDXwLR6WzaD0XXIeo/exec";
 
-
+/* Pull a Pass ID like VYRA-AB12CD out of whatever the QR / input contains */
 function normalize(value: string) {
-
-  const raw =
-    value.trim().toUpperCase();
-
-  const match =
-    raw.match(/PASS-[A-Z0-9_-]+/);
-
-  return match
-    ? match[0]
-    : raw;
+  const raw = value.trim().toUpperCase();
+  const match = raw.match(/(?:VYRA|PASS)-[A-Z0-9]+/);
+  return match ? match[0] : raw;
 }
 
+function isPassId(id: string) {
+  return /^(?:VYRA|PASS)-[A-Z0-9]+$/.test(id);
+}
 
-/* =========================
-   CALL GOOGLE APPS SCRIPT
-   USING JSONP
-========================= */
-
-function checkPassWithGoogle(
-  passId: string
-): Promise<Result> {
-
+/* Calls the Apps Script "scan" action (JSONP, so no CORS problems) */
+function scanPassWithGoogle(passId: string): Promise<Result> {
   return new Promise((resolve) => {
-
+    const w = window as unknown as Record<string, unknown>;
     const callbackName =
-      "vyraScanner_" +
-      Date.now() +
-      "_" +
-      Math.floor(
-        Math.random() * 10000
-      );
-
-    const script =
-      document.createElement("script");
-
-    const timeout =
-      window.setTimeout(() => {
-
-        cleanup();
-
-        resolve({
-          success: false,
-          message:
-            "Scanner connection timed out."
-        });
-
-      }, 15000);
-
+      "vyraScan_" + Date.now() + "_" + Math.floor(Math.random() * 10000);
+    const script = document.createElement("script");
 
     function cleanup() {
-
-      window.clearTimeout(timeout);
-
-      delete (
-        window as unknown as Record<
-          string,
-          unknown
-        >
-      )[callbackName];
-
+      window.clearTimeout(timer);
+      delete w[callbackName];
       script.remove();
     }
 
-
-    (
-      window as unknown as Record<
-        string,
-        unknown
-      >
-    )[callbackName] = (
-      response: Result
-    ) => {
-
+    const timer = window.setTimeout(() => {
       cleanup();
+      resolve({
+        success: false,
+        message: "Connection timed out. Check the internet and scan again.",
+      });
+    }, 15000);
 
+    w[callbackName] = (response: Result) => {
+      cleanup();
       resolve(response);
     };
 
-
-    const url =
+    script.src =
       APPS_SCRIPT_URL +
-      "?action=check" +
-      "&passId=" +
-      encodeURIComponent(passId) +
-      "&callback=" +
-      callbackName;
-
-
-    script.src = url;
+      "?action=scan" +
+      "&passId=" + encodeURIComponent(passId) +
+      "&callback=" + callbackName +
+      "&_=" + Date.now();
 
     script.onerror = () => {
-
       cleanup();
-
       resolve({
         success: false,
-        message:
-          "Could not connect to Google Sheets."
+        message: "Could not connect to Google Sheets.",
       });
     };
-
 
     document.body.appendChild(script);
   });
 }
 
-
-/* =========================
-   APP
-========================= */
-
 export default function App() {
+  const scanner = useRef<Html5Qrcode | null>(null);
+  const scanning = useRef(false);
+  const checking = useRef(false);
 
-  const scanner =
-    useRef<Html5Qrcode | null>(null);
-
-  const scanning =
-    useRef(false);
-
-  const [manual, setManual] =
-    useState("");
-
-  const [busy, setBusy] =
-    useState(false);
-
-  const [camError, setCamError] =
-    useState("");
-
-  const [result, setResult] =
-    useState<Result | null>(null);
-
-  const [restart, setRestart] =
-    useState(0);
-
-
-  /* =========================
-     STOP CAMERA
-  ========================= */
+  const [manual, setManual] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [camError, setCamError] = useState("");
+  const [result, setResult] = useState<Result | null>(null);
+  const [restart, setRestart] = useState(0);
 
   async function stopScanner() {
-
     if (scanner.current) {
-
       try {
-
-        if (scanning.current) {
-          await scanner.current.stop();
-        }
-
+        if (scanning.current) await scanner.current.stop();
       } catch {}
-
       try {
         await scanner.current.clear();
       } catch {}
     }
-
     scanner.current = null;
     scanning.current = false;
   }
 
-
-  /* =========================
-     CHECK PASS
-  ========================= */
-
   async function check(raw: string) {
+    if (checking.current) return;
 
-    const id =
-      normalize(raw);
+    const id = normalize(raw);
 
-    if (
-      !id ||
-      !id.startsWith("PASS-")
-    ) {
-
+    if (!isPassId(id)) {
       setResult({
         success: false,
         notFound: true,
-        message: "Invalid Pass ID."
+        id: id.slice(0, 40),
+        message: "Invalid pass. This is not a VYRA pass.",
       });
-
       return;
     }
 
-
+    checking.current = true;
     setBusy(true);
     setResult(null);
 
-
     try {
-
-      const response =
-        await checkPassWithGoogle(id);
-
+      const response = await scanPassWithGoogle(id);
       setResult(response);
-
       setManual("");
-
     } catch (error) {
-
       setResult({
         success: false,
-        message:
-          error instanceof Error
-            ? error.message
-            : "Scanner error."
+        message: error instanceof Error ? error.message : "Scanner error.",
       });
-
     } finally {
-
+      checking.current = false;
       setBusy(false);
     }
   }
 
-
-  /* =========================
-     START CAMERA
-  ========================= */
-
   async function startScanner() {
-
     await stopScanner();
-
     setCamError("");
     setResult(null);
 
-
-    const s =
-      new Html5Qrcode(
-        "qr-reader"
-      );
-
+    const s = new Html5Qrcode("qr-reader");
     scanner.current = s;
 
-
     try {
-
       await s.start(
-
-        {
-          facingMode: {
-            exact: "environment"
-          }
-        },
-
-        {
-          fps: 10,
-          qrbox: {
-            width: 250,
-            height: 250
-          }
-        },
-
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 250, height: 250 } },
         async (text) => {
-
-          if (
-            !scanning.current ||
-            busy
-          ) {
-            return;
-          }
-
+          if (!scanning.current || checking.current) return;
           scanning.current = false;
 
           try {
@@ -286,251 +153,136 @@ export default function App() {
 
           await check(text);
         },
-
         () => {}
       );
-
-
       scanning.current = true;
-
     } catch (error) {
-
       console.error(error);
-
       setCamError(
         "Camera could not start. Allow camera permission or use Manual Pass ID."
       );
     }
   }
 
-
   useEffect(() => {
-
     void startScanner();
-
     return () => {
       void stopScanner();
     };
-
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restart]);
 
-
-  /* =========================
-     RESULT STYLE
-  ========================= */
-
   let resultClass = "danger";
-
-  if (result?.success) {
-    resultClass = "success";
-  } else if (result?.alreadyUsed) {
-    resultClass = "warning";
-  }
-
+  if (result?.success) resultClass = "success";
+  else if (result?.alreadyUsed) resultClass = "warning";
 
   return (
-
     <main className="app">
-
       <section className="shell">
-
         <header>
-
           <div>
-
-            <div className="eyebrow">
-              VYRA ENTERTAINMENT
-            </div>
-
-            <h1>
-              ENTRY SCANNER
-            </h1>
-
-            <p>
-              Scan a guest pass to approve entry.
-            </p>
-
+            <div className="eyebrow">VYRA ENTERTAINMENT</div>
+            <h1>ENTRY SCANNER</h1>
+            <p>Scan a guest pass to approve entry.</p>
           </div>
-
-          <div className="live">
-            ● LIVE
-          </div>
-
+          <div className="live">● LIVE</div>
         </header>
 
-
         <section className="card">
+          <div className="title">SCAN QR CODE</div>
 
-          <div className="title">
-            SCAN QR CODE
-          </div>
+          <div id="qr-reader" className="reader" />
 
-
-          <div
-            id="qr-reader"
-            className="reader"
-          />
-
-
-          {camError && (
-
-            <div className="error">
-              {camError}
-            </div>
-
-          )}
-
+          {camError && <div className="error">{camError}</div>}
 
           <div className="or">
             <span>OR</span>
           </div>
 
-
           <div className="manual">
-
             <input
               value={manual}
-              onChange={(e) =>
-                setManual(e.target.value)
-              }
+              onChange={(e) => setManual(e.target.value)}
               onKeyDown={(e) => {
-
-                if (e.key === "Enter") {
-                  void check(manual);
-                }
-
+                if (e.key === "Enter") void check(manual);
               }}
-              placeholder="PASS-EC49B6BB"
+              placeholder="VYRA-AB12CD"
             />
 
-
             <button
-              disabled={
-                busy ||
-                !manual.trim()
-              }
-              onClick={() =>
-                void check(manual)
-              }
+              disabled={busy || !manual.trim()}
+              onClick={() => void check(manual)}
             >
-              {busy
-                ? "CHECKING..."
-                : "CHECK PASS"}
+              {busy ? "CHECKING..." : "CHECK PASS"}
             </button>
-
           </div>
-
         </section>
 
-
         {result && (
-
-          <section
-            className={
-              "result " +
-              resultClass
-            }
-          >
-
+          <section className={"result " + resultClass}>
             <div className="icon">
-
-              {result.success
-                ? "✓"
-                : result.alreadyUsed
-                  ? "!"
-                  : "×"}
-
+              {result.success ? "✓" : result.alreadyUsed ? "!" : "×"}
             </div>
 
-
             <div>
-
               <h2>
-
                 {result.success
-                  ? "APPROVED"
+                  ? "VALID PASS"
                   : result.alreadyUsed
-                    ? "ALREADY CHECKED IN"
+                    ? "ALREADY SCANNED"
                     : result.notFound
                       ? "INVALID PASS"
                       : "SCAN ERROR"}
-
               </h2>
 
-
-              <p>
-                {result.message}
-              </p>
-
+              <p>{result.message}</p>
 
               {result.id && (
-
                 <div className="details">
-
                   <div>
                     PASS ID
-                    <strong>
-                      {result.id}
-                    </strong>
+                    <strong>{result.id}</strong>
                   </div>
 
-
                   {result.name && (
-
                     <div>
                       GUEST
-                      <strong>
-                        {result.name}
-                      </strong>
+                      <strong>{result.name}</strong>
                     </div>
-
                   )}
-
 
                   {result.passType && (
-
                     <div>
                       TYPE
-                      <strong>
-                        {result.passType}
-                      </strong>
+                      <strong>{result.passType}</strong>
                     </div>
-
                   )}
 
+                  {result.alreadyUsed && result.scannedAt && (
+                    <div>
+                      FIRST SCANNED
+                      <strong>{result.scannedAt}</strong>
+                    </div>
+                  )}
                 </div>
-
               )}
-
             </div>
-
           </section>
-
         )}
-
 
         <button
           className="next"
           onClick={() => {
-
             setResult(null);
             setManual("");
-            setRestart(
-              (value) => value + 1
-            );
-
+            setRestart((value) => value + 1);
           }}
         >
           SCAN NEXT PASS
         </button>
 
-
-        <footer>
-          VYRA ENTRY CONTROL · AUTHENTIC PASS VERIFICATION
-        </footer>
-
+        <footer>VYRA ENTRY CONTROL · AUTHENTIC PASS VERIFICATION</footer>
       </section>
-
     </main>
   );
 }
