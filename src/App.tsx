@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Html5Qrcode } from "html5-qrcode";
+import logo from "./assets/logo.webp";
 
 type Result = {
   success?: boolean;
@@ -178,20 +179,30 @@ export default function App() {
 
   return (
     <main className="app">
+      <div className="bg" aria-hidden="true">
+        <img className="bgl" src={logo} alt="" />
+      </div>
+
       <section className="shell">
         <header>
-          <div>
-            <div className="eyebrow">VYRA ENTERTAINMENT</div>
-            <h1>ENTRY SCANNER</h1>
-            <p>Scan a guest pass to approve entry.</p>
+          <img className="logo" src={logo} alt="VYRA Entertainment" />
+          <div className="subline">ENTRY SCANNER</div>
+          <div className="live">
+            <i /> LIVE
           </div>
-          <div className="live">● LIVE</div>
         </header>
 
         <section className="card">
           <div className="title">SCAN QR CODE</div>
+          <p className="hint">Hold the pass QR inside the frame</p>
 
-          <div id="qr-reader" className="reader" />
+          <div className={"viewfinder" + (busy || result ? " paused" : "")}>
+            <div id="qr-reader" className="reader" />
+            <span className="corner tl" />
+            <span className="corner tr" />
+            <span className="corner bl" />
+            <span className="corner br" />
+          </div>
 
           {camError && <div className="error">{camError}</div>}
 
